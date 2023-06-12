@@ -18,6 +18,11 @@ echo 'Creating azure container instance'
 az container create --resource-group $RESOURCE_GROUP --name proxy-server --image $IMAGE_TAG --ports 4000 443 --registry-login-server $CONTAINER_REGISTRY_LOGIN_SERVER \
   --registry-username 00000000-0000-0000-0000-000000000000 --registry-password $TOKEN --dns-name-label proventask-proxy-server --query ipAddress --output tsv
 
+ACI_IP=$(az container show --name proxy-server --resource-group $RESOURCE_GROUP  --query ipAddress.ip --output tsv)
+
+echo "Container instance ip: $ACI_IP"
+az network dns record-set a update -g $RESOURCE_GROUP -n dev -z proventask.com --set "aRecords[0]ipv4Address=$ACI_IP"
+
 # az container logs --resource-group $RESOURCE_GROUP --name proxy-server
 # az container attach --resource-group $RESOURCE_GROUP --name proxy-server
 # az container delete --resource-group $RESOURCE_GROUP --name proxy-server

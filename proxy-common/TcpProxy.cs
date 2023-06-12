@@ -90,30 +90,25 @@ public class TcpProxy : ITcpProxy
                     }
 
                     var bufferSeq = new ReadOnlySequence<byte>(enrichedBuffer);
+                    int messageStartIndexInBuffer = 0;
 
-                    if (partialDataFromPreviousCallback.IsEmpty)
+                    while (enrichedBuffer.Length > messageStartIndexInBuffer)
                     {
-                        int messageStartIndexInBuffer = 0;
-
-                        while (enrichedBuffer.Length > messageStartIndexInBuffer)
+                        int remainingBytesInBuffer = enrichedBuffer.Length - messageStartIndexInBuffer;
+                        int? messageLengthInclHeader = MessageLengthInclHeader(bufferSeq.Slice(messageStartIndexInBuffer, 4));
+                        _logger.Info($"remainingBytesInBuffer: {remainingBytesInBuffer}, messageStartIndexInBuffer: {messageStartIndexInBuffer}, messageLengthInclHeader: {messageLengthInclHeader}");
+                        if (remainingBytesInBuffer < 4 || remainingBytesInBuffer < messageLengthInclHeader!.Value)
                         {
-                            int remainingBytesInBuffer = enrichedBuffer.Length - messageStartIndexInBuffer;
-                            int? messageLengthInclHeader = MessageLengthInclHeader(bufferSeq.Slice(messageStartIndexInBuffer, 4));
-                            _logger.Info($"remainingBytesInBuffer: {remainingBytesInBuffer}, messageStartIndexInBuffer: {messageStartIndexInBuffer}, messageLengthInclHeader: {messageLengthInclHeader}");
-                            if (remainingBytesInBuffer < 4 || remainingBytesInBuffer < messageLengthInclHeader!.Value)
-                            {
-                                partialDataFromPreviousCallback = enrichedBuffer.Slice(messageStartIndexInBuffer, remainingBytesInBuffer);
-                                break;
-                            }
-                            var dataToProcess = enrichedBuffer.Slice(messageStartIndexInBuffer, messageLengthInclHeader!.Value);
-                            var result = await ProcessCompleteMessage(socket.Handle, onNewMessage, dataToProcess);
-                            if (result.ConnectionError)
-                            {
-                                return new ReadMessageResult(ConnectionError: true);
-                            }
-
-                            messageStartIndexInBuffer = messageLengthInclHeader!.Value;
+                            partialDataFromPreviousCallback = enrichedBuffer.Slice(messageStartIndexInBuffer, remainingBytesInBuffer);
+                            break;
                         }
+                        var dataToProcess = enrichedBuffer.Slice(messageStartIndexInBuffer, messageLengthInclHeader!.Value);
+                        var result = await ProcessCompleteMessage(socket.Handle, onNewMessage, dataToProcess);
+                        if (result.ConnectionError)
+                        {
+                            return new ReadMessageResult(ConnectionError: true);
+                        }
+                        messageStartIndexInBuffer = messageLengthInclHeader!.Value;
                     }
                     return new ReadMessageResult(ConnectionError: false);
                 }
@@ -132,7 +127,6 @@ public class TcpProxy : ITcpProxy
                     return new ReadMessageResult(ConnectionError: false);
                 }
             }));
-
         });
     }
 
