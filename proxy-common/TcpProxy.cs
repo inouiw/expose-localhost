@@ -67,10 +67,6 @@ public class TcpProxy : ITcpProxy
     private static int? MessageLengthInclHeader(ReadOnlySequence<byte> bufferSeqStartingAtMessage)
         => bufferSeqStartingAtMessage.Length < 4 ? null : int.Parse(Encoding.UTF8.GetString(bufferSeqStartingAtMessage));
 
-    record PartialMessageFromPreviousCallback(Memory<byte> PartialData, int PayloadLength, int ConnectionId, int SequenceNumber);
-
-
-
     public async Task<ReadMessageResult> ReadMessage(Socket socket, Func<ReadOnlyMemory<byte>, int, Task> onNewMessage)
     {
         return await Task.Run(() =>
