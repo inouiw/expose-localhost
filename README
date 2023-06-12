@@ -9,7 +9,7 @@
 - The proxy-client is started on the development computer. It connects to the proxy-server and forwards all traffic to a local webserver.
 
 ## How TLS with a custom domain name works
-- Assuming you own a domain name and a TLS certificate for the domain name. Configure a DNA A record with the IP of the proxy-server. Then configure the TLS certificate in your local webserver. Configuring TLS with asp.net is just 2 config lines. See https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis?view=aspnetcore-7.0#specify-the-custom-certificate-via-configuration. That is all.
+- Assuming you own a domain name and a TLS certificate for the domain name. Configure a DNS A or CNAME recordset with the IP or FQDN of the proxy-server. Then configure the TLS certificate in your local webserver. Configuring TLS with asp.net is just 2 config lines. See https://learn.microsoft.com/en-us/aspnet/core/fundamentals/minimal-apis?view=aspnetcore-7.0#specify-the-custom-certificate-via-configuration. That is all.
 
 ## Usage
 - Build the proxy-server image and deploy it to the cloud: `cd proxy-server/scripts && ./build.sh && ./deploy.sh`. You may need to adjust the `build.sh` and `deploy.sh` files.

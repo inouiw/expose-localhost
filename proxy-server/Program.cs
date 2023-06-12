@@ -10,32 +10,39 @@ var connectedProxyClient = (Socket?)null;
 int portListenForProxyClients = 4000;
 int portListenForNonProxyClients = 443;
 
-var listener1 = SocketHelper.ListenForConnections(portListenForProxyClients, (socketClient) =>
+ILogger _logger = new Logger();
+ISocketHelper _socketHelper = new SocketHelper(_logger);
+ITcpProxy _tcpProxy = new TcpProxy(_logger, _socketHelper);
+
+var listener1 = _socketHelper.ListenForConnections(portListenForProxyClients, (socketClient) =>
 {
-    Console.WriteLine($"New client connected on port {portListenForProxyClients} {(socketClient.RemoteEndPoint as IPEndPoint)?.Address}");
+    var ipEndPoint = socketClient.RemoteEndPoint as IPEndPoint;
+    _logger.Info($"Proxy client connected. IP: {ipEndPoint?.Address}, port: {ipEndPoint?.Port}, Socket handle: {socketClient.Handle}");
     connectedProxyClient = socketClient;
-    return TcpProxy.ReadMessage(socketClient, async (buffer, connectionId) =>
+    return _tcpProxy.ReadMessage(socketClient, async (buffer, connectionId) =>
     {
         var nonProxyClient = connectionIdToNonProxyClient[connectionId];
         await nonProxyClient.SendAsync(buffer);
     });
 });
 
-var listener2 = SocketHelper.ListenForConnections(portListenForNonProxyClients, (socketClient) =>
+var listener2 = _socketHelper.ListenForConnections(portListenForNonProxyClients, (socketClient) =>
 {
-    Console.WriteLine($"New client connected on port {portListenForNonProxyClients} {(socketClient.RemoteEndPoint as IPEndPoint)?.Address}");
     int connectionId = ++connectionIdCounter;
+    var ipEndPoint = socketClient.RemoteEndPoint as IPEndPoint;
+    _logger.Info($"Browser client connected. IP: {ipEndPoint?.Address}, port: {ipEndPoint?.Port}, Socket handle: {socketClient.Handle}, connectionId: {connectionId}");
     connectionIdToNonProxyClient.TryAdd(connectionId, socketClient);
-    return Task.Run(() => SocketHelper.ReadSocket(socketClient, TcpProxy.WrappedMessageMaxLen, async (buffer) =>
+    return Task.Run(() => _socketHelper.ReadSocket(socketClient, TcpProxy.WrappedDataMessageMaxLen, async (buffer) =>
     {
         if (connectedProxyClient != null)
         {
-            Console.WriteLine($"WriteMessageToProxyClient {buffer.Length}");
-            await TcpProxy.WriteMessage(connectedProxyClient, connectionId, buffer);
+            _logger.Info($"Writing to proxy client. {buffer.Length} bytes including header data, {buffer.Length - TcpProxy.DataMessageHeaderLen} bytes excluding header data.");
+            await _tcpProxy.WriteMessage(connectedProxyClient, connectionId, buffer);
         }
+        return new ReadMessageResult(ConnectionError: false);
     }));
 });
 
-Console.WriteLine("ProxyServer waiting for connections");
+_logger.Info("ProxyServer waiting for connections");
 await Task.WhenAny(listener1, listener2);
-Console.WriteLine("ProxyServer exiting");
+_logger.Info("ProxyServer exiting");

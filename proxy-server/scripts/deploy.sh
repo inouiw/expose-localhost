@@ -16,7 +16,7 @@ docker push $IMAGE_TAG
 
 echo 'Creating azure container instance'
 az container create --resource-group $RESOURCE_GROUP --name proxy-server --image $IMAGE_TAG --ports 4000 443 --registry-login-server $CONTAINER_REGISTRY_LOGIN_SERVER \
-  --registry-username 00000000-0000-0000-0000-000000000000 --registry-password $TOKEN --dns-name-label proventask-proxy-server --query ipAddress.fqdn --output tsv
+  --registry-username 00000000-0000-0000-0000-000000000000 --registry-password $TOKEN --dns-name-label proventask-proxy-server --query ipAddress --output tsv
 
 # az container logs --resource-group $RESOURCE_GROUP --name proxy-server
 # az container attach --resource-group $RESOURCE_GROUP --name proxy-server
