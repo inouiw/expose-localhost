@@ -34,7 +34,7 @@ await _tcpProxy.ReadMessage(clientToFromProxyServer, async (buffer, connectionId
                     return new ReadMessageResult(ConnectionError: false);
                 });
                 // if readSocket returns, it means the connection was closed
-                // webserverClient.Close();
+                webserverClient.Close();
                 connectionIdToWebserverClient.TryRemove(connectionId, out _);
             });
         }
