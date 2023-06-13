@@ -30,7 +30,7 @@ public class SocketHelper : ISocketHelper
             var ipAddress = await ParseIPAddress(ipOrHost);
             ipEndPoint = new IPEndPoint(ipAddress, port);
             socket = new WrappedSocket(ipEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp, _logger, socketNamePrefix);
-            await socket.ConnectAsync(ipOrHost, port);
+            await socket.ConnectAsync(ipEndPoint);
             return socket;
         }
         catch (Exception e)

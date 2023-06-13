@@ -11,7 +11,7 @@ public interface IWrappedSocket : IDisposable
     Task<int> ReceiveAsync(byte[] buffer);
     ValueTask<int> ReceiveAsync(Memory<byte> buffer);
     Task<int> ReceiveAsync(ArraySegment<byte> buffer, SocketFlags socketFlags);
-    Task ConnectAsync(string host, int port);
+    Task ConnectAsync(EndPoint remoteEP);
     void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, bool optionValue);
     void Bind(EndPoint localEP);
     void Listen(int backlog);
@@ -85,9 +85,9 @@ public class WrappedSocket : IWrappedSocket, IDisposable
         }
     }
 
-    public Task ConnectAsync(string host, int port)
+    public Task ConnectAsync(EndPoint remoteEP)
     {
-        return _socket.ConnectAsync(host, port);
+        return _socket.ConnectAsync(remoteEP);
     }
 
     public void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, bool optionValue)
