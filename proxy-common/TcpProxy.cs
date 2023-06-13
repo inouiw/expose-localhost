@@ -6,9 +6,11 @@ namespace proxy_common;
 
 public interface ITcpProxy
 {
-    Task<ReadMessageResult> ReadMessage(Socket socket, Func<ReadOnlyMemory<byte>, int, Task> onNewMessage);
-    Task WriteMessage(Socket socket, int connectionId, ReadOnlyMemory<byte> message);
-    Task SendKeepAlivePingInBckground(Socket socket);
+    Task<ReadMessageResult> ReadMessage(IWrappedSocket socket, Func<ReadOnlyMemory<byte>, int, Task> onNewMessage);
+    Task<int> WriteMessage(IWrappedSocket socket, int connectionId, ReadOnlyMemory<byte> message);
+    Task SendKeepAlivePingInBckground(IWrappedSocket socket);
+    Task WriteClientHelloMessage(IWrappedSocket socket);
+    Task<bool> TryReadClientHelloMessage(IWrappedSocket socket);
 }
 
 // Protocol between proxy-client and proxy-server:
@@ -25,8 +27,11 @@ public class TcpProxy : ITcpProxy
 {
     public const int DataMessageHeaderLen = 4 + 4 + 4 + 4;
     public const int PingMessageHeaderLen = 4;
+    public const int ClientHelloMessageHeaderLen = 4;
     public const int WrappedDataMessageMaxLen = 4_096 - DataMessageHeaderLen;
+    public const string MessageTypeData = "DATA";
     public const string MessageTypePing = "PING";
+    public const string MessageTypeClientHello = "CHEL";
 
     private int _sequenceNumber = 0;
 
@@ -40,8 +45,9 @@ public class TcpProxy : ITcpProxy
     }
 
     public static int PingMessageTotalLen => PingMessageHeaderLen + MessageTypePing.Length;
+    public static int ClientHelloMessageTotalLen => PingMessageHeaderLen + MessageTypeClientHello.Length;
 
-    public async Task WriteMessage(Socket socket, int connectionId, ReadOnlyMemory<byte> message)
+    public async Task<int> WriteMessage(IWrappedSocket socket, int connectionId, ReadOnlyMemory<byte> message)
     {
         try
         {
@@ -51,82 +57,108 @@ public class TcpProxy : ITcpProxy
             }
             int messageLenIncludingHeader = message.Length + DataMessageHeaderLen;
             var sequenceNumber = NextSequenceNumber();
-            var header = Encoding.UTF8.GetBytes($"{messageLenIncludingHeader,4}DATA{sequenceNumber,4}{connectionId,4}");
+            var header = Encoding.UTF8.GetBytes($"{messageLenIncludingHeader,4}{MessageTypeData}{sequenceNumber,4}{connectionId,4}");
             _logger.Info($"Sending DATA message to proxy. messageLenIncludingHeader: {messageLenIncludingHeader}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
             var headerAndMessage = new Memory<byte>(new byte[header.Length + message.Length]);
             header.CopyTo(headerAndMessage);
             message.CopyTo(headerAndMessage[header.Length..]);
-            await socket.SendAsync(headerAndMessage);
+            return await socket.SendAsync(headerAndMessage);
         }
         catch (Exception e)
         {
             _logger.Error($"Exception in {nameof(WriteMessage)}: {e}");
+            return 0;
         }
+    }
+
+    public async Task<bool> TryReadClientHelloMessage(IWrappedSocket socket)
+    {
+        var buffer = new byte[ClientHelloMessageTotalLen];
+        var readSocketTask = socket.ReceiveAsync(buffer);
+        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(4));
+
+        if (await Task.WhenAny(readSocketTask, timeoutTask) == readSocketTask)
+        {
+            int bytesRead = readSocketTask.Result;
+            if (bytesRead == ClientHelloMessageTotalLen
+                && Encoding.UTF8.GetString(buffer) == $"   {ClientHelloMessageTotalLen}{MessageTypeClientHello}")
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static int? MessageLengthInclHeader(ReadOnlySequence<byte> bufferSeqStartingAtMessage)
         => bufferSeqStartingAtMessage.Length < 4 ? null : int.Parse(Encoding.UTF8.GetString(bufferSeqStartingAtMessage));
 
-    public async Task<ReadMessageResult> ReadMessage(Socket socket, Func<ReadOnlyMemory<byte>, int, Task> onNewMessage)
+    public async Task<ReadMessageResult> ReadMessage(IWrappedSocket socket, Func<ReadOnlyMemory<byte>, int, Task> onNewMessage)
     {
-        return await Task.Run(() =>
+        var partialDataFromPreviousCallback = Memory<byte>.Empty;
+
+        var x = await _socketHelper.ReadSocketUntilError(socket, 4_096, (async (buffer) =>
         {
-            var partialDataFromPreviousCallback = Memory<byte>.Empty;
-
-            return _socketHelper.ReadSocket(socket, 4_096, (async (buffer) =>
+            int messageStartIndexInBuffer = 0;
+            var enrichedBuffer = buffer;
+            try
             {
-                try
+                if (partialDataFromPreviousCallback.IsEmpty is false)
                 {
-                    var enrichedBuffer = buffer;
-                    if (partialDataFromPreviousCallback.IsEmpty is false)
-                    {
-                        enrichedBuffer = new Memory<byte>(new byte[partialDataFromPreviousCallback.Length + buffer.Length]);
-                        partialDataFromPreviousCallback.CopyTo(enrichedBuffer);
-                        buffer.CopyTo(enrichedBuffer[partialDataFromPreviousCallback.Length..]);
-                    }
-
-                    var bufferSeq = new ReadOnlySequence<byte>(enrichedBuffer);
-                    int messageStartIndexInBuffer = 0;
-
-                    while (enrichedBuffer.Length > messageStartIndexInBuffer)
-                    {
-                        int remainingBytesInBuffer = enrichedBuffer.Length - messageStartIndexInBuffer;
-                        int? messageLengthInclHeader = MessageLengthInclHeader(bufferSeq.Slice(messageStartIndexInBuffer, 4));
-                        _logger.Info($"remainingBytesInBuffer: {remainingBytesInBuffer}, messageStartIndexInBuffer: {messageStartIndexInBuffer}, messageLengthInclHeader: {messageLengthInclHeader}");
-                        if (remainingBytesInBuffer < 4 || remainingBytesInBuffer < messageLengthInclHeader!.Value)
-                        {
-                            partialDataFromPreviousCallback = enrichedBuffer.Slice(messageStartIndexInBuffer, remainingBytesInBuffer);
-                            break;
-                        }
-                        var dataToProcess = enrichedBuffer.Slice(messageStartIndexInBuffer, messageLengthInclHeader!.Value);
-                        var result = await ProcessCompleteMessage(socket.Handle, onNewMessage, dataToProcess);
-                        if (result.ConnectionError)
-                        {
-                            return new ReadMessageResult(ConnectionError: true);
-                        }
-                        messageStartIndexInBuffer = messageLengthInclHeader!.Value;
-                    }
-                    return new ReadMessageResult(ConnectionError: false);
+                    enrichedBuffer = new Memory<byte>(new byte[partialDataFromPreviousCallback.Length + buffer.Length]);
+                    partialDataFromPreviousCallback.CopyTo(enrichedBuffer);
+                    buffer.CopyTo(enrichedBuffer[partialDataFromPreviousCallback.Length..]);
+                    partialDataFromPreviousCallback = Memory<byte>.Empty;
                 }
-                catch (Exception e)
+
+                var bufferSeq = new ReadOnlySequence<byte>(enrichedBuffer);
+
+                while (enrichedBuffer.Length > messageStartIndexInBuffer)
                 {
-                    if (e is SocketException se && se.ErrorCode == 32) // Broken pipe
+                    int remainingBytesInBuffer = enrichedBuffer.Length - messageStartIndexInBuffer;
+                    int? messageLengthInclHeader = MessageLengthInclHeader(bufferSeq.Slice(messageStartIndexInBuffer, 4));
+                    // _logger.Info($"remainingBytesInBuffer: {remainingBytesInBuffer}, messageStartIndexInBuffer: {messageStartIndexInBuffer}, messageLengthInclHeader: {messageLengthInclHeader}");
+                    if (remainingBytesInBuffer < 4 || remainingBytesInBuffer < messageLengthInclHeader!.Value)
                     {
-                        _logger.Error($"SocketException with ErrorCode Broken pipe. socket handle: {socket.Handle}");
-                        return new ReadMessageResult(ConnectionError: true);
+                        partialDataFromPreviousCallback = enrichedBuffer.Slice(messageStartIndexInBuffer, remainingBytesInBuffer);
+                        break;
                     }
-                    var bufferSeq = new ReadOnlySequence<byte>(buffer);
-                    var bufferData = Encoding.UTF8.GetString(bufferSeq);
-                    _logger.Error($"Exception in {nameof(ReadMessage)}. bufferSeq.Length: {bufferSeq.Length}. {e}\n\nbuffer:{bufferData}\n\n");
+                    var dataToProcess = enrichedBuffer.Slice(messageStartIndexInBuffer, messageLengthInclHeader!.Value);
+                    await ProcessCompleteMessage(socket.Handle, onNewMessage, dataToProcess);
 
-                    await Task.Delay(TimeSpan.FromSeconds(2)); // Some time to prevent too many log messages.
-                    return new ReadMessageResult(ConnectionError: false);
+                    messageStartIndexInBuffer += messageLengthInclHeader!.Value;
                 }
-            }));
-        });
+                return new ReadMessageResult(ConnectionError: false);
+            }
+            catch (ObjectDisposedException e)
+            {
+                _logger.Error($"ObjectDisposedException in ReadMessage. Socket closed. Socket handle: {socket.Handle}. {e}");
+                return new ReadMessageResult(ConnectionError: true);
+            }
+            catch (SocketException e)
+            {
+                _logger.Error($"SocketException in ReadMessage. Socket handle: {socket.Handle}. SocketException: {e.Message}");
+                return new ReadMessageResult(ConnectionError: true);
+            }
+            catch (Exception e)
+            {
+                if (e is SocketException se && se.ErrorCode == 32) // Broken pipe
+                {
+                    _logger.Error($"SocketException with ErrorCode Broken pipe. socket handle: {socket.Handle}");
+                    return new ReadMessageResult(ConnectionError: true);
+                }
+                var bufferSeq = new ReadOnlySequence<byte>(enrichedBuffer);
+                var bufferData = Encoding.UTF8.GetString(bufferSeq);
+                _logger.Error($"Exception in {nameof(ReadMessage)}. messageStartIndexInBuffer: {messageStartIndexInBuffer}, bufferSeq.Length: {bufferSeq.Length}. {e}\n\nbuffer:{bufferData}\n\n");
+
+                await Task.Delay(TimeSpan.FromSeconds(2)); // Some time to prevent too many log messages.
+                return new ReadMessageResult(ConnectionError: false);
+            }
+        }));
+        // socket.Close();
+        return x;
     }
 
-    private async Task<ReadMessageResult> ProcessCompleteMessage(
+    private async Task ProcessCompleteMessage(
         nint socketHandleForLogging,
         Func<ReadOnlyMemory<byte>, int, Task> onNewMessage,
         Memory<byte> buffer)
@@ -140,13 +172,13 @@ public class TcpProxy : ITcpProxy
         {
             _logger.Info($"Received {MessageTypePing}. socket handle: {socketHandleForLogging}");
         }
-        else if (messageType == "DATA")
+        else if (messageType == MessageTypeData)
         {
             var payloadLen = messageLengthInclHeader - DataMessageHeaderLen;
             var sequenceNumber = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(8, 4)));
             var connectionId = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(12, 4)));
 
-            _logger.Info($"Received message socket handle: {socketHandleForLogging}, payloadLen: {payloadLen}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
+            _logger.Info($"Received {MessageTypeData} message. socket handle: {socketHandleForLogging}, payloadLen: {payloadLen}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
 
             if (messageLengthInclHeader != buffer.Length)
             {
@@ -155,31 +187,48 @@ public class TcpProxy : ITcpProxy
             var messageData = buffer.Slice(DataMessageHeaderLen, payloadLen);
             await onNewMessage(messageData, connectionId);
         }
-        return new ReadMessageResult(ConnectionError: false);
     }
 
-    public Task SendKeepAlivePingInBckground(Socket socket)
+    public Task SendKeepAlivePingInBckground(IWrappedSocket socket)
     {
-        return Task.Run(async () =>
+        var task = new Task(async () =>
         {
             while (true)
             {
-                await Task.Delay(TimeSpan.FromSeconds(60));
+                await Task.Delay(TimeSpan.FromSeconds(10));
                 await WritePingMessage(socket);
             }
-        });
+        }, TaskCreationOptions.LongRunning);
+        task.Start();
+        return task;
     }
 
-    private async Task WritePingMessage(Socket socket)
+    private async Task WritePingMessage(IWrappedSocket socket)
     {
         try
         {
+            _logger.Info($"Sending keep alive {MessageTypePing} message to proxy");
             var header = Encoding.UTF8.GetBytes($"   {PingMessageTotalLen}{MessageTypePing}");
             await socket.SendAsync(header);
         }
         catch (Exception e)
         {
             _logger.Error($"Exception in {nameof(WritePingMessage)}: {e}");
+        }
+    }
+
+    // Anyone could connect to the server. By sending a message after connecting we can identify most fake connections.
+    public async Task WriteClientHelloMessage(IWrappedSocket socket)
+    {
+        try
+        {
+            _logger.Info($"Sending client hello ({MessageTypeClientHello}) message to proxy");
+            var header = Encoding.UTF8.GetBytes($"   {ClientHelloMessageTotalLen}{MessageTypeClientHello}");
+            await socket.SendAsync(header);
+        }
+        catch (Exception e)
+        {
+            _logger.Error($"Exception in {nameof(WriteClientHelloMessage)}: {e}");
         }
     }
 

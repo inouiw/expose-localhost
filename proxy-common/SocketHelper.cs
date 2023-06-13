@@ -5,9 +5,9 @@ namespace proxy_common;
 
 public interface ISocketHelper
 {
-    Task<Socket> ConnectToServer(string ipOrHost, int port);
-    Task ListenForConnections(int port, Func<Socket, Task> onNewConnection);
-    Task<ReadMessageResult> ReadSocket(Socket socket, int maxResultLen, Func<Memory<byte>, Task<ReadMessageResult>> onNewData);
+    Task<IWrappedSocket> ConnectToServer(string ipOrHost, int port);
+    Task ListenForConnections(int port, Func<IWrappedSocket, Task> onNewConnection);
+    Task<ReadMessageResult> ReadSocketUntilError(IWrappedSocket socket, int maxResultLen, Func<Memory<byte>, Task<ReadMessageResult>> onNewData);
 }
 
 public record ReadMessageResult(bool ConnectionError);
@@ -21,13 +21,13 @@ public class SocketHelper : ISocketHelper
         _logger = logger;
     }
 
-    public async Task<Socket> ConnectToServer(string ipOrHost, int port)
+    public async Task<IWrappedSocket> ConnectToServer(string ipOrHost, int port)
     {
         try
         {
             var ipAddress = await ParseIPAddress(ipOrHost);
             var ipEndPoint = new IPEndPoint(ipAddress, port);
-            var socket = new Socket(ipEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            var socket = new WrappedSocket(ipEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp, _logger);
             await socket.ConnectAsync(ipOrHost, port);
             return socket;
         }
@@ -38,11 +38,11 @@ public class SocketHelper : ISocketHelper
         }
     }
 
-    public async Task ListenForConnections(int port, Func<Socket, Task> onNewConnection)
+    public async Task ListenForConnections(int port, Func<IWrappedSocket, Task> onNewConnection)
     {
         try
         {
-            using var socket = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+            using var socket = new WrappedSocket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp, _logger);
             socket.SetSocketOption(SocketOptionLevel.IPv6, SocketOptionName.IPv6Only, false);
             socket.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
             socket.Listen(100);
@@ -50,7 +50,19 @@ public class SocketHelper : ISocketHelper
             while (true)
             {
                 var socketClient = await socket.AcceptAsync();
-                await onNewConnection(socketClient);
+
+                new Task(async () =>
+                {
+                    if (await CanReadFromSocket(socketClient))
+                    {
+                        await onNewConnection(socketClient);
+                    }
+                    else
+                    {
+                        socketClient.Close();
+                    }
+                }, TaskCreationOptions.LongRunning)
+                .Start();
             }
         }
         catch (SocketException e)
@@ -65,7 +77,20 @@ public class SocketHelper : ISocketHelper
         }
     }
 
-    public async Task<ReadMessageResult> ReadSocket(Socket socket, int maxResultLen, Func<Memory<byte>, Task<ReadMessageResult>> onNewData)
+    private static async Task<bool> CanReadFromSocket(IWrappedSocket socket)
+    {
+        var buffer = new byte[1];
+        var readSocketTask = socket.ReceiveAsync(buffer, SocketFlags.Peek);
+        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(4));
+
+        if (await Task.WhenAny(readSocketTask, timeoutTask) == readSocketTask)
+        {
+            return true;
+        }
+        return false;
+    }
+
+    public async Task<ReadMessageResult> ReadSocketUntilError(IWrappedSocket socket, int maxResultLen, Func<Memory<byte>, Task<ReadMessageResult>> onNewData)
     {
         try
         {
@@ -85,21 +110,21 @@ public class SocketHelper : ISocketHelper
                 }
                 else
                 {
-                    _logger.Info($"received 0 bytes. Socket handle: {socket.Handle}");
+                    _logger.Info($"Received 0 bytes. This indicates a connection error. Socket handle: {socket.Handle}");
                     return new ReadMessageResult(ConnectionError: true);
                 }
                 // _logger.Info($"End ReadSocket. socket handle: {socket.Handle}");
             }
         }
-        catch (ObjectDisposedException)
+        catch (ObjectDisposedException e)
         {
-            _logger.Error($"ObjectDisposedException in ReadSocket. Socket closed. Socket handle: {socket.Handle}");
-            throw;
+            _logger.Error($"ObjectDisposedException in ReadSocket. Socket closed. Socket handle: {socket.Handle}. {e}");
+            return new ReadMessageResult(ConnectionError: true);
         }
         catch (SocketException e)
         {
-            _logger.Error($"SocketException in ReadSocket. Socket handle: {socket.Handle}. SocketException: {e}");
-            throw;
+            _logger.Error($"SocketException in ReadSocket. Socket handle: {socket.Handle}. SocketException: {e.Message}");
+            return new ReadMessageResult(ConnectionError: true);
         }
         catch (Exception e)
         {

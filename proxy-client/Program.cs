@@ -1,5 +1,4 @@
 ﻿using System.Collections.Concurrent;
-using System.Net.Sockets;
 using proxy_common;
 
 var proxyServerIpOrHost = "20.8.239.52";
@@ -14,12 +13,13 @@ ITcpProxy _tcpProxy = new TcpProxy(_logger, _socketHelper);
 _logger.Info($"Connecting to proxy server {proxyServerIpOrHost}:{proxyServerPort}");
 _logger.Info($"Incoming requests from the proxy server will be forwarded to {localWebserverIpOrHost}:{localWebserverPort}");
 
-var connectionIdToWebserverClient = new ConcurrentDictionary<int, Socket>();
+var connectionIdToWebserverClient = new ConcurrentDictionary<int, IWrappedSocket>();
 var clientToFromProxyServer = await _socketHelper.ConnectToServer(proxyServerIpOrHost, proxyServerPort);
 _logger.Info($"Connected to proxy server. Socket handle: {clientToFromProxyServer.Handle}");
+await _tcpProxy.WriteClientHelloMessage(clientToFromProxyServer);
 var t = _tcpProxy.SendKeepAlivePingInBckground(clientToFromProxyServer);
 
-var x = Task.Run(() => _tcpProxy.ReadMessage(clientToFromProxyServer, async (buffer, connectionId) =>
+await _tcpProxy.ReadMessage(clientToFromProxyServer, async (buffer, connectionId) =>
     {
         // _logger.Info($"Data from server. {buffer.Length} bytes. ConnectionId: {connectionId}");
         if (connectionIdToWebserverClient.TryGetValue(connectionId, out var webserverClient) is false)
@@ -28,16 +28,17 @@ var x = Task.Run(() => _tcpProxy.ReadMessage(clientToFromProxyServer, async (buf
             connectionIdToWebserverClient.TryAdd(connectionId, webserverClient);
             var x = Task.Run(async () =>
             {
-                var result = await _socketHelper.ReadSocket(webserverClient, TcpProxy.WrappedDataMessageMaxLen, async (buf) =>
+                var result = await _socketHelper.ReadSocketUntilError(webserverClient, TcpProxy.WrappedDataMessageMaxLen, async (buf) =>
                 {
                     await _tcpProxy.WriteMessage(clientToFromProxyServer, connectionId, buf);
                     return new ReadMessageResult(ConnectionError: false);
                 });
                 // if readSocket returns, it means the connection was closed
+                // webserverClient.Close();
                 connectionIdToWebserverClient.TryRemove(connectionId, out _);
             });
         }
         await webserverClient.SendAsync(buffer);
-    }));
+    });
 
-x.Wait();
+_logger.Info("Exiting");
