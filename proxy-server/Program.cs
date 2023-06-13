@@ -40,6 +40,7 @@ var listener1 = _socketHelper.ListenForConnections(portListenForProxyClients, as
         }
     });
     _logger.Info("Proxy client disconnected.");
+    connectedProxyClient = null;
     _logger.Info("Closing all connections so can restart cleanly when proxy client connects again.");
     CloseAllClientConnections();
 });
@@ -55,6 +56,12 @@ void CloseAllClientConnections()
 
 var listener2 = _socketHelper.ListenForConnections(portListenForNonProxyClients, async (socketClient) =>
 {
+    if (connectedProxyClient is null)
+    {
+        _logger.Info("Non-proxy client connected but no proxy client connected. Closing connection.");
+        socketClient.Close();
+        return;
+    }
     int connectionId = ++connectionIdCounter;
     _logger.Info($"Browser client connected. IP: {socketClient.RemoteAddress}, port: {socketClient.RemotePort}, Socket name: {socketClient.Name}, connectionId: {connectionId}");
     connectionIdToNonProxyClient.TryAdd(connectionId, socketClient);
@@ -68,8 +75,7 @@ var listener2 = _socketHelper.ListenForConnections(portListenForNonProxyClients,
         }
         return new ReadMessageResult(ConnectionError: false);
     });
-    // socketClient.Close();
-    // return x;
+    socketClient.Close();
 });
 
 _logger.Info("ProxyServer waiting for connections");

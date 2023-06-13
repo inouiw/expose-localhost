@@ -23,18 +23,20 @@ public class SocketHelper : ISocketHelper
 
     public async Task<IWrappedSocket> ConnectToServer(string ipOrHost, int port, string socketNamePrefix)
     {
-        IPEndPoint? ipEndPoint = null!;
+        IPEndPoint? ipEndPoint = null;
+        IWrappedSocket? socket = null;
         try
         {
             var ipAddress = await ParseIPAddress(ipOrHost);
             ipEndPoint = new IPEndPoint(ipAddress, port);
-            var socket = new WrappedSocket(ipEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp, _logger, socketNamePrefix);
+            socket = new WrappedSocket(ipEndPoint.AddressFamily, SocketType.Stream, ProtocolType.Tcp, _logger, socketNamePrefix);
             await socket.ConnectAsync(ipOrHost, port);
             return socket;
         }
         catch (Exception e)
         {
             _logger.Error($"{e.GetType().Name} in ConnectToServer. ipOrHost: {ipOrHost}, ipEndPoint: {ipEndPoint}. {e}");
+            socket?.Dispose();
             throw;
         }
     }
@@ -119,28 +121,23 @@ public class SocketHelper : ISocketHelper
         }
         catch (ObjectDisposedException e)
         {
-            _logger.Error($"ObjectDisposedException in ReadSocket. Socket closed. Socket name: {socket.Name}. {e}");
+            _logger.Error($"ObjectDisposedException in {nameof(ReadSocketUntilError)}. Socket closed. Socket name: {socket.Name}. {e}");
             return new ReadMessageResult(ConnectionError: true);
         }
         catch (SocketException e)
         {
-            _logger.Error($"SocketException in ReadSocket. Socket name: {socket.Name}. SocketException: {e.Message}");
+            _logger.Error($"SocketException in {nameof(ReadSocketUntilError)}. Socket name: {socket.Name}. SocketException: {e.Message}");
             return new ReadMessageResult(ConnectionError: true);
         }
         catch (Exception e)
         {
-            _logger.Error($"Exception in ReadSocket. Socket name: {socket.Name}. {e}");
+            _logger.Error($"Exception in {nameof(ReadSocketUntilError)}. Socket name: {socket.Name}. {e}");
             throw;
         }
     }
 
     private async static Task<IPAddress> ParseIPAddress(string ipOrHost)
     {
-        // Workround for PlatformNotSupportedException on macos: "Sockets on this platform are invalid for use after a failed connection attempt."
-        if (ipOrHost == "localhost")
-        {
-            return IPAddress.Loopback;
-        }
         if (IPAddress.TryParse(ipOrHost.Trim(), out var iPAddress))
         {
             return iPAddress;

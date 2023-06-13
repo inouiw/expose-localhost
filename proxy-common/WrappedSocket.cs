@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 
 namespace proxy_common;
 
-public interface IWrappedSocket
+public interface IWrappedSocket : IDisposable
 {
     ValueTask<int> SendAsync(Memory<byte> buffer);
     ValueTask<int> SendAsync(ReadOnlyMemory<byte> buffer);

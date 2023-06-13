@@ -1,7 +1,7 @@
 ﻿using System.Collections.Concurrent;
 using proxy_common;
 
-var proxyServerIpOrHost = "20.8.239.52";
+var proxyServerIpOrHost = "<proxy-server-host-or-ip>"; // "127.0.0.1";
 var proxyServerPort = 4000;
 var localWebserverIpOrHost = "192.168.2.65";
 var localWebserverPort = 7278;
