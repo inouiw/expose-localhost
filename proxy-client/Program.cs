@@ -3,7 +3,7 @@ using proxy_common;
 
 var proxyServerIpOrHost = "<proxy-server-host-or-ip>"; // "127.0.0.1";
 var proxyServerPort = 4000;
-var localWebserverIpOrHost = "192.168.2.65";
+var localWebserverIpOrHost = "127.0.0.1";
 var localWebserverPort = 7278;
 
 ILogger _logger = new Logger();
