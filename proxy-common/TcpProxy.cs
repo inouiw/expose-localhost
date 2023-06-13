@@ -58,7 +58,7 @@ public class TcpProxy : ITcpProxy
             int messageLenIncludingHeader = message.Length + DataMessageHeaderLen;
             var sequenceNumber = NextSequenceNumber();
             var header = Encoding.UTF8.GetBytes($"{messageLenIncludingHeader,4}{MessageTypeData}{sequenceNumber,4}{connectionId,4}");
-            _logger.Info($"Sending DATA message. socket name: {socket.Name}. messageLenIncludingHeader: {messageLenIncludingHeader}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
+            // _logger.Info($"Sending DATA message. socket name: {socket.Name}. messageLenIncludingHeader: {messageLenIncludingHeader}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
             var headerAndMessage = new Memory<byte>(new byte[header.Length + message.Length]);
             header.CopyTo(headerAndMessage);
             message.CopyTo(headerAndMessage[header.Length..]);
@@ -176,10 +176,10 @@ public class TcpProxy : ITcpProxy
         else if (messageType == MessageTypeData)
         {
             var payloadLen = messageLengthInclHeader - DataMessageHeaderLen;
-            var sequenceNumber = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(8, 4)));
+            // var sequenceNumber = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(8, 4)));
             var connectionId = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(12, 4)));
 
-            _logger.Info($"Received {MessageTypeData} message. socket name: {socketNameForLogging}, payloadLen: {payloadLen}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
+            // _logger.Info($"Received {MessageTypeData} message. socket name: {socketNameForLogging}, payloadLen: {payloadLen}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
 
             if (messageLengthInclHeader != buffer.Length)
             {
