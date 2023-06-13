@@ -58,7 +58,7 @@ public class TcpProxy : ITcpProxy
             int messageLenIncludingHeader = message.Length + DataMessageHeaderLen;
             var sequenceNumber = NextSequenceNumber();
             var header = Encoding.UTF8.GetBytes($"{messageLenIncludingHeader,4}{MessageTypeData}{sequenceNumber,4}{connectionId,4}");
-            _logger.Info($"Sending DATA message to proxy. messageLenIncludingHeader: {messageLenIncludingHeader}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
+            _logger.Info($"Sending DATA message. socket name: {socket.Name}. messageLenIncludingHeader: {messageLenIncludingHeader}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
             var headerAndMessage = new Memory<byte>(new byte[header.Length + message.Length]);
             header.CopyTo(headerAndMessage);
             message.CopyTo(headerAndMessage[header.Length..]);
@@ -123,7 +123,7 @@ public class TcpProxy : ITcpProxy
                         break;
                     }
                     var dataToProcess = enrichedBuffer.Slice(messageStartIndexInBuffer, messageLengthInclHeader!.Value);
-                    await ProcessCompleteMessage(socket.Handle, onNewMessage, dataToProcess);
+                    await ProcessCompleteMessage(socket.Name, onNewMessage, dataToProcess);
 
                     messageStartIndexInBuffer += messageLengthInclHeader!.Value;
                 }
@@ -131,24 +131,24 @@ public class TcpProxy : ITcpProxy
             }
             catch (ObjectDisposedException e)
             {
-                _logger.Error($"ObjectDisposedException in ReadMessage. Socket closed. Socket handle: {socket.Handle}. {e}");
+                _logger.Error($"ObjectDisposedException in ReadMessage. Socket closed. Socket name: {socket.Name}. {e}");
                 return new ReadMessageResult(ConnectionError: true);
             }
             catch (SocketException e)
             {
-                _logger.Error($"SocketException in ReadMessage. Socket handle: {socket.Handle}. SocketException: {e.Message}");
+                _logger.Error($"SocketException in ReadMessage. Socket name: {socket.Name}. SocketException: {e.Message}");
                 return new ReadMessageResult(ConnectionError: true);
             }
             catch (Exception e)
             {
                 if (e is SocketException se && se.ErrorCode == 32) // Broken pipe
                 {
-                    _logger.Error($"SocketException with ErrorCode Broken pipe. socket handle: {socket.Handle}");
+                    _logger.Error($"SocketException with ErrorCode Broken pipe. Socket name: {socket.Name}");
                     return new ReadMessageResult(ConnectionError: true);
                 }
                 var bufferSeq = new ReadOnlySequence<byte>(enrichedBuffer);
                 var bufferData = Encoding.UTF8.GetString(bufferSeq);
-                _logger.Error($"Exception in {nameof(ReadMessage)}. messageStartIndexInBuffer: {messageStartIndexInBuffer}, bufferSeq.Length: {bufferSeq.Length}. {e}\n\nbuffer:{bufferData}\n\n");
+                _logger.Error($"Exception in {nameof(ReadMessage)}. Socket name: {socket.Name}, messageStartIndexInBuffer: {messageStartIndexInBuffer}, bufferSeq.Length: {bufferSeq.Length}. {e}\n\nbuffer:{bufferData}\n\n");
 
                 await Task.Delay(TimeSpan.FromSeconds(2)); // Some time to prevent too many log messages.
                 return new ReadMessageResult(ConnectionError: false);
@@ -159,18 +159,18 @@ public class TcpProxy : ITcpProxy
     }
 
     private async Task ProcessCompleteMessage(
-        nint socketHandleForLogging,
+        string socketNameForLogging,
         Func<ReadOnlyMemory<byte>, int, Task> onNewMessage,
         Memory<byte> buffer)
     {
         var bufferSeq = new ReadOnlySequence<byte>(buffer);
         var messageLengthInclHeader = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(0, 4)));
         var messageType = Encoding.UTF8.GetString(bufferSeq.Slice(4, 4));
-        _logger.Info($"bufferSeq.Length: {bufferSeq.Length}, messageLengthInclHeader: {messageLengthInclHeader}, messageType: {messageType}");
+        // _logger.Info($"bufferSeq.Length: {bufferSeq.Length}, messageLengthInclHeader: {messageLengthInclHeader}, messageType: {messageType}");
 
         if (messageType == MessageTypePing)
         {
-            _logger.Info($"Received {MessageTypePing}. socket handle: {socketHandleForLogging}");
+            _logger.Info($"Received {MessageTypePing}. socket name: {socketNameForLogging}");
         }
         else if (messageType == MessageTypeData)
         {
@@ -178,7 +178,7 @@ public class TcpProxy : ITcpProxy
             var sequenceNumber = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(8, 4)));
             var connectionId = int.Parse(Encoding.UTF8.GetString(bufferSeq.Slice(12, 4)));
 
-            _logger.Info($"Received {MessageTypeData} message. socket handle: {socketHandleForLogging}, payloadLen: {payloadLen}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
+            _logger.Info($"Received {MessageTypeData} message. socket name: {socketNameForLogging}, payloadLen: {payloadLen}, sequenceNumber: {sequenceNumber}, connectionId: {connectionId}");
 
             if (messageLengthInclHeader != buffer.Length)
             {

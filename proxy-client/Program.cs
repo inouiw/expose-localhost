@@ -14,8 +14,8 @@ _logger.Info($"Connecting to proxy server {proxyServerIpOrHost}:{proxyServerPort
 _logger.Info($"Incoming requests from the proxy server will be forwarded to {localWebserverIpOrHost}:{localWebserverPort}");
 
 var connectionIdToWebserverClient = new ConcurrentDictionary<int, IWrappedSocket>();
-var clientToFromProxyServer = await _socketHelper.ConnectToServer(proxyServerIpOrHost, proxyServerPort);
-_logger.Info($"Connected to proxy server. Socket handle: {clientToFromProxyServer.Handle}");
+var clientToFromProxyServer = await _socketHelper.ConnectToServer(proxyServerIpOrHost, proxyServerPort, $"ConnectedToProxyServerPort-{proxyServerPort}");
+_logger.Info($"Connected to proxy server. Socket name: {clientToFromProxyServer.Name}");
 await _tcpProxy.WriteClientHelloMessage(clientToFromProxyServer);
 var t = _tcpProxy.SendKeepAlivePingInBckground(clientToFromProxyServer);
 
@@ -24,7 +24,7 @@ await _tcpProxy.ReadMessage(clientToFromProxyServer, async (buffer, connectionId
         // _logger.Info($"Data from server. {buffer.Length} bytes. ConnectionId: {connectionId}");
         if (connectionIdToWebserverClient.TryGetValue(connectionId, out var webserverClient) is false)
         {
-            webserverClient = await _socketHelper.ConnectToServer(localWebserverIpOrHost, localWebserverPort);
+            webserverClient = await _socketHelper.ConnectToServer(localWebserverIpOrHost, localWebserverPort, $"ConnectedToLocalServerPort-{localWebserverPort}");
             connectionIdToWebserverClient.TryAdd(connectionId, webserverClient);
             var x = Task.Run(async () =>
             {
