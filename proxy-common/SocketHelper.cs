@@ -83,14 +83,8 @@ public class SocketHelper : ISocketHelper
     private static async Task<bool> CanReadFromSocket(IWrappedSocket socket)
     {
         var buffer = new byte[1];
-        var readSocketTask = socket.ReceiveAsync(buffer, SocketFlags.Peek);
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(4));
-
-        if (await Task.WhenAny(readSocketTask, timeoutTask) == readSocketTask)
-        {
-            return true;
-        }
-        return false;
+        var bytesRead = await socket.ReceiveAsync(buffer, SocketFlags.Peek, TimeSpan.FromSeconds(4));
+        return bytesRead > 0;
     }
 
     public async Task<ReadMessageResult> ReadSocketUntilError(IWrappedSocket socket, int maxResultLen, Func<Memory<byte>, Task<ReadMessageResult>> onNewData)
@@ -118,6 +112,11 @@ public class SocketHelper : ISocketHelper
                 }
                 // _logger.Info($"End ReadSocket. socket handle: {socket.Handle}");
             }
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.Error($"OperationCanceledException in {nameof(ReadSocketUntilError)}. Socket name: {socket.Name}.");
+            return new ReadMessageResult(ConnectionError: true);
         }
         catch (ObjectDisposedException e)
         {

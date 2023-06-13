@@ -8,10 +8,10 @@ public interface IWrappedSocket : IDisposable
 {
     ValueTask<int> SendAsync(Memory<byte> buffer);
     ValueTask<int> SendAsync(ReadOnlyMemory<byte> buffer);
-    Task<int> ReceiveAsync(byte[] buffer);
+    ValueTask<int> ReceiveAsync(byte[] buffer, TimeSpan timeout);
+    ValueTask<int> ReceiveAsync(Memory<byte> buffer, SocketFlags socketFlags, TimeSpan timeout);
     ValueTask<int> ReceiveAsync(Memory<byte> buffer);
-    Task<int> ReceiveAsync(ArraySegment<byte> buffer, SocketFlags socketFlags);
-    Task ConnectAsync(EndPoint remoteEP);
+    ValueTask ConnectAsync(EndPoint remoteEP);
     void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, bool optionValue);
     void Bind(EndPoint localEP);
     void Listen(int backlog);
@@ -21,6 +21,7 @@ public interface IWrappedSocket : IDisposable
     IPAddress? RemoteAddress { get; }
     int? RemotePort { get; }
     string Name { get; }
+    bool IsClosed { get; }
 }
 
 public class WrappedSocket : IWrappedSocket, IDisposable
@@ -28,14 +29,18 @@ public class WrappedSocket : IWrappedSocket, IDisposable
     private readonly Socket _socket;
     private readonly ILogger _logger;
     private readonly string _name;
-    private readonly object _sendLock = new();
-    private readonly object _receiveLock = new();
+    private readonly SemaphoreSlim _sendMutex = new(1);
+    private readonly SemaphoreSlim _receiveMutex = new(1);
+    private readonly CancellationTokenSource cancellationTokenSource = new();
+
+    public static List<WrappedSocket> OpenSockets = new();
 
     public WrappedSocket(Socket socket, ILogger logger, string socketNamePrefix)
     {
         _socket = socket;
         _logger = logger;
         _name = $"{socketNamePrefix}_Handle-{_socket.Handle}";
+        OpenSockets.Add(this);
     }
 
     public WrappedSocket(AddressFamily addressFamily, SocketType socketType, ProtocolType protocolType, ILogger logger, string socketNamePrefix)
@@ -43,51 +48,87 @@ public class WrappedSocket : IWrappedSocket, IDisposable
         _socket = new Socket(addressFamily, socketType, protocolType);
         _logger = logger;
         _name = $"{socketNamePrefix}_Handle-{_socket.Handle}";
+        OpenSockets.Add(this);
     }
 
-    public ValueTask<int> SendAsync(Memory<byte> buffer)
+    public async ValueTask<int> SendAsync(Memory<byte> buffer)
     {
-        lock (_sendLock)
+        await _sendMutex.WaitAsync();
+        try
         {
-            return _socket.SendAsync(buffer);
+            return await _socket.SendAsync(buffer, cancellationTokenSource.Token);
+        }
+        finally
+        {
+            _sendMutex.Release();
         }
     }
 
-    public ValueTask<int> SendAsync(ReadOnlyMemory<byte> buffer)
+    public async ValueTask<int> SendAsync(ReadOnlyMemory<byte> buffer)
     {
-        lock (_sendLock)
+        await _sendMutex.WaitAsync();
+        try
         {
-            return _socket.SendAsync(buffer);
+            return await _socket.SendAsync(buffer, cancellationTokenSource.Token);
+        }
+        finally
+        {
+            _sendMutex.Release();
         }
     }
 
-    public Task<int> ReceiveAsync(byte[] buffer)
+    public async ValueTask<int> ReceiveAsync(byte[] buffer, TimeSpan timeout)
     {
-        lock (_receiveLock)
+        await _receiveMutex.WaitAsync();
+        try
         {
-            return _socket.ReceiveAsync(buffer);
+            var cts = new CancellationTokenSource(timeout);
+            return await _socket.ReceiveAsync(buffer, SocketFlags.None, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return 0;
+        }
+        finally
+        {
+            _receiveMutex.Release();
         }
     }
 
-    public ValueTask<int> ReceiveAsync(Memory<byte> buffer)
+    public async ValueTask<int> ReceiveAsync(Memory<byte> buffer, SocketFlags socketFlags, TimeSpan timeout)
     {
-        lock (_receiveLock)
+        await _receiveMutex.WaitAsync();
+        try
         {
-            return _socket.ReceiveAsync(buffer);
+            var cts = new CancellationTokenSource(timeout);
+            return await _socket.ReceiveAsync(buffer, socketFlags, cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return 0;
+        }
+        finally
+        {
+            _receiveMutex.Release();
         }
     }
 
-    public Task<int> ReceiveAsync(ArraySegment<byte> buffer, SocketFlags socketFlags)
+    public async ValueTask<int> ReceiveAsync(Memory<byte> buffer)
     {
-        lock (_receiveLock)
+        await _receiveMutex.WaitAsync();
+        try
         {
-            return _socket.ReceiveAsync(buffer, socketFlags);
+            return await _socket.ReceiveAsync(buffer, cancellationTokenSource.Token);
+        }
+        finally
+        {
+            _receiveMutex.Release();
         }
     }
 
-    public Task ConnectAsync(EndPoint remoteEP)
+    public ValueTask ConnectAsync(EndPoint remoteEP)
     {
-        return _socket.ConnectAsync(remoteEP);
+        return _socket.ConnectAsync(remoteEP, cancellationTokenSource.Token);
     }
 
     public void SetSocketOption(SocketOptionLevel optionLevel, SocketOptionName optionName, bool optionValue)
@@ -112,11 +153,15 @@ public class WrappedSocket : IWrappedSocket, IDisposable
     }
 
     public nint Handle => _socket.Handle;
+    public bool IsClosed { get; private set; } = false;
 
     public void Close([CallerMemberName] string? caller = null)
     {
         _logger.Info($"Closing socket. Name: {Name}, Caller: {caller}");
+        cancellationTokenSource.Cancel();
         _socket.Close();
+        OpenSockets.Remove(this);
+        IsClosed = true;
     }
 
     public void Dispose()

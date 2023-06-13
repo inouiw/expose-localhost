@@ -74,17 +74,12 @@ public class TcpProxy : ITcpProxy
     public async Task<bool> TryReadClientHelloMessage(IWrappedSocket socket)
     {
         var buffer = new byte[ClientHelloMessageTotalLen];
-        var readSocketTask = socket.ReceiveAsync(buffer);
-        var timeoutTask = Task.Delay(TimeSpan.FromSeconds(4));
+        var bytesRead = await socket.ReceiveAsync(buffer, TimeSpan.FromSeconds(4));
 
-        if (await Task.WhenAny(readSocketTask, timeoutTask) == readSocketTask)
+        if (bytesRead == ClientHelloMessageTotalLen
+            && Encoding.UTF8.GetString(buffer) == $"   {ClientHelloMessageTotalLen}{MessageTypeClientHello}")
         {
-            int bytesRead = readSocketTask.Result;
-            if (bytesRead == ClientHelloMessageTotalLen
-                && Encoding.UTF8.GetString(buffer) == $"   {ClientHelloMessageTotalLen}{MessageTypeClientHello}")
-            {
-                return true;
-            }
+            return true;
         }
         return false;
     }
@@ -129,6 +124,11 @@ public class TcpProxy : ITcpProxy
                 }
                 return new ReadMessageResult(ConnectionError: false);
             }
+            catch (OperationCanceledException)
+            {
+                _logger.Error($"OperationCanceledException in ReadMessage. Socket name: {socket.Name}.");
+                return new ReadMessageResult(ConnectionError: true);
+            }
             catch (ObjectDisposedException e)
             {
                 _logger.Error($"ObjectDisposedException in ReadMessage. Socket closed. Socket name: {socket.Name}. {e}");
@@ -171,6 +171,7 @@ public class TcpProxy : ITcpProxy
         if (messageType == MessageTypePing)
         {
             _logger.Info($"Received {MessageTypePing}. socket name: {socketNameForLogging}");
+            _logger.Info($"Number of open sockets: {WrappedSocket.OpenSockets.Count}");
         }
         else if (messageType == MessageTypeData)
         {

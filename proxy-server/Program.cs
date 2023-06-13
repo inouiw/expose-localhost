@@ -30,6 +30,10 @@ var listener1 = _socketHelper.ListenForConnections(portListenForProxyClients, as
             int bytesSent = await nonProxyClient.SendAsync(buffer);
             // _logger.Info($"Sent {bytesSent} bytes to non-proxy client. ConnectionId: {connectionId}");
         }
+        catch (OperationCanceledException e)
+        {
+            _logger.Error($"OperationCanceledException in ReadMessage. Socket name: {nonProxyClient.Name}.");
+        }
         catch (ObjectDisposedException)
         {
             _logger.Error($"ObjectDisposedException in ReadMessage callback. Socket closed. Socket name: {nonProxyClient.Name}.");
@@ -41,8 +45,10 @@ var listener1 = _socketHelper.ListenForConnections(portListenForProxyClients, as
     });
     _logger.Info("Proxy client disconnected.");
     connectedProxyClient = null;
+    _logger.Info($"Number of open sockets: {WrappedSocket.OpenSockets.Count}");
     _logger.Info("Closing all connections so can restart cleanly when proxy client connects again.");
     CloseAllClientConnections();
+    _logger.Info($"Number of open sockets: {WrappedSocket.OpenSockets.Count}");
 });
 
 void CloseAllClientConnections()
@@ -67,12 +73,14 @@ var listener2 = _socketHelper.ListenForConnections(portListenForNonProxyClients,
     connectionIdToNonProxyClient.TryAdd(connectionId, socketClient);
     var x = await _socketHelper.ReadSocketUntilError(socketClient, TcpProxy.WrappedDataMessageMaxLen, async (buffer) =>
     {
-        if (connectedProxyClient != null)
+        if (connectedProxyClient == null)
         {
-            // _logger.Info($"Writing to proxy client. {buffer.Length} bytes without header data, {buffer.Length + TcpProxy.DataMessageHeaderLen} bytes including header data.");
-            int bytesSent = await _tcpProxy.WriteMessage(connectedProxyClient, connectionId, buffer);
-            // _logger.Info($"Sent {bytesSent} bytes to proxy client. ConnectionId: {connectionId}");
+            return new ReadMessageResult(ConnectionError: true);
         }
+        // _logger.Info($"Writing to proxy client. {buffer.Length} bytes without header data, {buffer.Length + TcpProxy.DataMessageHeaderLen} bytes including header data.");
+        int bytesSent = await _tcpProxy.WriteMessage(connectedProxyClient, connectionId, buffer);
+        // _logger.Info($"Sent {bytesSent} bytes to proxy client. ConnectionId: {connectionId}");
+
         return new ReadMessageResult(ConnectionError: false);
     });
     socketClient.Close();
